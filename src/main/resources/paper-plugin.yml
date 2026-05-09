@@ -1,8 +1,8 @@
-name: PaperWinterTemplate
+name: SellCustomItems
 version: ${version}
-main: me.mapacheee.template.TemplatePlugin
+main: me.mapacheee.sellcustom.SellCustomItemsPlugin
 api-version: '1.21'
-description: A template plugin using the Winter Framework
+description: ${description}
 author: Mapacheee
 folia-supported: true
 dependencies:
@@ -10,3 +10,14 @@ dependencies:
     MapacheeeLib:
       load: BEFORE
       required: true
+commands:
+  buycustomitems:
+    description: Open the custom items shop
+  sellcustomitems:
+    description: Sell custom items admin command
+  sc:
+    description: Short alias for sellcustomitems
+permissions:
+  sellcustom.admin:
+    description: Admin permission for sellcustomitems
+    default: op

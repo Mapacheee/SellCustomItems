@@ -1,1 +1,5 @@
-feature-enabled: true
+gui-title: "<dark_gray>Shop <gray>(<gold><page><gray>/<gold><pages><gray>)"
+gui-rows: 6
+economy-enabled: true
+default-buy-margin: 1.0
+default-sell-margin: 0.5
