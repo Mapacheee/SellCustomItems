@@ -1,6 +1,7 @@
 package me.mapacheee.sellcustom.service;
 
 import com.google.inject.Inject;
+import com.thewinterframework.configurate.Container;
 import com.thewinterframework.service.annotation.Service;
 import me.mapacheee.sellcustom.config.ScConfig;
 import net.milkbowl.vault.economy.Economy;
@@ -17,9 +18,9 @@ public final class EconomyService {
     private Economy economy;
 
     @Inject
-    public EconomyService(Logger logger, ScConfig config) {
+    public EconomyService(Logger logger, Container<ScConfig> configContainer) {
         this.logger = logger;
-        this.config = config;
+        this.config = configContainer.get();
         this.economy = initEconomy();
     }
 

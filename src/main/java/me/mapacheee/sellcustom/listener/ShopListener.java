@@ -53,19 +53,20 @@ public final class ShopListener implements Listener {
         if (clicked == null || clicked.getType() == Material.AIR) return;
 
         event.getView().title();
-        String title = event.getView().title().toString();
-        boolean isMainShop = title.contains("Custom Items Shop") || title.contains("Comp");
-        boolean isConfirmShop = title.contains("Confirm");
-        boolean isEditor = title.contains("Editor") || title.contains("Editing");
+        String title = event.getView().title() != null ? event.getView().title().toString() : "";
 
-        if (isMainShop) {
-            handleMainShopClick(player, clicked, shiftClick);
+        boolean isEditor = title.contains("Editor") || title.contains("Editing:");
+        boolean isConfirmShop = title.contains("Confirm") || title.contains("Purchase");
+        boolean isMainShop = title.contains("Shop") || title.contains("Custom Items");
+
+        if (isEditor) {
+            handleEditorClick(player, clicked, event.getSlot());
             event.setCancelled(true);
         } else if (isConfirmShop) {
             handleConfirmClick(player, clicked);
             event.setCancelled(true);
-        } else if (isEditor) {
-            handleEditorClick(player, clicked, event.getSlot());
+        } else if (isMainShop) {
+            handleMainShopClick(player, clicked, shiftClick);
             event.setCancelled(true);
         }
     }

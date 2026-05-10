@@ -1,6 +1,7 @@
 package me.mapacheee.sellcustom.gui;
 
 import com.google.inject.Inject;
+import com.thewinterframework.configurate.Container;
 import com.thewinterframework.service.annotation.Service;
 import me.mapacheee.sellcustom.config.ScConfig;
 import me.mapacheee.sellcustom.config.ScMessages;
@@ -32,11 +33,11 @@ public final class MainShopGui {
     private static final int ITEMS_PER_PAGE = 45;
 
     @Inject
-    public MainShopGui(ShopService shopService, EconomyService economyService, ScConfig config, ScMessages messages) {
+    public MainShopGui(ShopService shopService, EconomyService economyService, Container<ScConfig> configContainer, Container<ScMessages> messagesContainer) {
         this.shopService = shopService;
         this.economyService = economyService;
-        this.config = config;
-        this.messages = messages;
+        this.config = configContainer.get();
+        this.messages = messagesContainer.get();
     }
 
     public void open(Player player, int page) {

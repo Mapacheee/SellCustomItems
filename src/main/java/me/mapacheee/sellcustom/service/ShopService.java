@@ -1,6 +1,7 @@
 package me.mapacheee.sellcustom.service;
 
 import com.google.inject.Inject;
+import com.thewinterframework.configurate.Container;
 import com.thewinterframework.service.annotation.Service;
 import me.mapacheee.sellcustom.config.ScConfig;
 import me.mapacheee.sellcustom.data.CustomItem;
@@ -25,10 +26,10 @@ public final class ShopService {
     private final Logger logger;
 
     @Inject
-    public ShopService(CustomItemStorage itemStorage, EconomyService economyService, ScConfig config, Logger logger) {
+    public ShopService(CustomItemStorage itemStorage, EconomyService economyService, Container<ScConfig> configContainer, Logger logger) {
         this.itemStorage = itemStorage;
         this.economyService = economyService;
-        this.config = config;
+        this.config = configContainer.get();
         this.logger = logger;
     }
 
