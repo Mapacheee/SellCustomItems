@@ -7,6 +7,9 @@ author: Mapacheee
 folia-supported: true
 dependencies:
   server:
+    Vault:
+      load: BEFORE
+      required: true
     MapacheeeLib:
       load: BEFORE
       required: true
