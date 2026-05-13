@@ -6,16 +6,25 @@ import com.thewinterframework.service.annotation.Service;
 import me.mapacheee.sellcustom.config.ScConfig;
 import me.mapacheee.sellcustom.data.CustomItem;
 import me.mapacheee.sellcustom.data.CustomItemStorage;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.SkullMeta;
+import com.destroystokyo.paper.profile.PlayerProfile;
+import com.destroystokyo.paper.profile.ProfileProperty;
 import org.slf4j.Logger;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 
 @Service
 public final class ShopService {
@@ -75,22 +84,20 @@ public final class ShopService {
         return true;
     }
 
-    public int sellItem(Player player, CustomItem shopItem, ItemStack playerItem, int amount) {
+    public int sellItem(Player player, CustomItem shopItem, int amount) {
         if (!shopItem.isCanSell()) return 0;
 
-        ItemStack toRemove = playerItem.clone();
-        toRemove.setAmount(amount);
+        int removed = removeMatchingItems(player, shopItem, amount);
+        if (removed <= 0) return 0;
 
-        player.getInventory().removeItem(toRemove);
-
-        double totalEarn = shopItem.getSellPrice() * amount;
+        double totalEarn = shopItem.getSellPrice() * removed;
 
         if (economyService.isEnabled()) {
             economyService.depositMoney(player, totalEarn);
         }
 
-        logger.info("Player {} sold {} x {} for ${}", player.getName(), amount, shopItem.getName(), totalEarn);
-        return amount;
+        logger.info("Player {} sold {} x {} for ${}", player.getName(), removed, shopItem.getName(), totalEarn);
+        return removed;
     }
 
     public List<ItemStack> findPlayerItems(Player player, CustomItem shopItem) {
@@ -101,7 +108,7 @@ public final class ShopService {
 
         for (ItemStack item : player.getInventory()) {
             if (item == null) continue;
-            if (item.getType() == targetMaterial) {
+            if (matchesCustomItem(item, shopItem)) {
                 foundItems.add(item);
             }
         }
@@ -111,13 +118,10 @@ public final class ShopService {
 
     public int countItemsInInventory(Player player, CustomItem shopItem) {
         int count = 0;
-        Material targetMaterial = Material.getMaterial(shopItem.getMaterial().toUpperCase());
-
-        if (targetMaterial == null) return 0;
 
         for (ItemStack item : player.getInventory()) {
             if (item == null) continue;
-            if (item.getType() == targetMaterial) {
+            if (matchesCustomItem(item, shopItem)) {
                 count += item.getAmount();
             }
         }
@@ -137,18 +141,22 @@ public final class ShopService {
         var meta = stack.getItemMeta();
         if (meta != null) {
             if (item.getName() != null && !item.getName().isEmpty()) {
-                meta.displayName(MiniMessage.miniMessage().deserialize(item.getName()));
+                meta.displayName(deserializeText(item.getName()));
             }
 
             if (item.getLore() != null && !item.getLore().isEmpty()) {
                 var lore = item.getLore().stream()
-                        .map(line -> MiniMessage.miniMessage().deserialize(line))
+                        .map(this::deserializeText)
                         .toList();
                 meta.lore(lore);
             }
 
             if (item.getCustomModelData() > 0) {
                 meta.setCustomModelData(item.getCustomModelData());
+            }
+
+            if (material == Material.PLAYER_HEAD && item.getHeadTexture() != null && !item.getHeadTexture().isEmpty()) {
+                applyHeadTexture(meta, item.getHeadTexture());
             }
 
             stack.setItemMeta(meta);
@@ -167,25 +175,33 @@ public final class ShopService {
         String materialName = handItem.getType().name();
         String itemId = materialName.toLowerCase() + "_" + System.currentTimeMillis();
 
+        String displayName = materialName;
+        if (handItem.getItemMeta() != null && handItem.getItemMeta().displayName() != null) {
+            displayName = MiniMessage.miniMessage().serialize(handItem.getItemMeta().displayName());
+        }
+
         CustomItem newItem = new CustomItem(
                 itemId,
-                handItem.getItemMeta() != null && handItem.getItemMeta().displayName() != null
-                        ? handItem.getItemMeta().displayName().toString()
-                        : materialName,
+                displayName,
                 materialName,
                 buyPrice,
                 sellPrice
         );
 
         if (handItem.getItemMeta() != null) {
-            if (handItem.getItemMeta().lore() != null) {
-                newItem.setLore(Objects.requireNonNull(handItem.getItemMeta().lore()).stream()
+            ItemMeta meta = handItem.getItemMeta();
+            if (meta.lore() != null) {
+                newItem.setLore(Objects.requireNonNull(meta.lore()).stream()
                         .map(c -> net.kyori.adventure.text.minimessage.MiniMessage.miniMessage().serialize(c))
                         .toList());
             }
-            if (handItem.getItemMeta().getCustomModelData() != 0) {
-                newItem.setCustomModelData(handItem.getItemMeta().getCustomModelData());
+            if (meta.hasCustomModelData()) {
+                newItem.setCustomModelData(meta.getCustomModelData());
             }
+        }
+
+        if (handItem.getType() == Material.PLAYER_HEAD) {
+            newItem.setHeadTexture(extractHeadTexture(handItem));
         }
 
         newItem.setAmount(handItem.getAmount());
@@ -199,5 +215,112 @@ public final class ShopService {
         newItem.setSlot(maxSlot + 1);
 
         itemStorage.addItem(newItem);
+    }
+
+    private int removeMatchingItems(Player player, CustomItem shopItem, int amount) {
+        int remaining = amount;
+
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int i = 0; i < contents.length; i++) {
+            if (remaining <= 0) break;
+            ItemStack stack = contents[i];
+            if (stack == null) continue;
+            if (!matchesCustomItem(stack, shopItem)) continue;
+
+            int take = Math.min(stack.getAmount(), remaining);
+            int newAmount = stack.getAmount() - take;
+            remaining -= take;
+
+            if (newAmount <= 0) {
+                contents[i] = null;
+            } else {
+                stack.setAmount(newAmount);
+                contents[i] = stack;
+            }
+        }
+
+        player.getInventory().setContents(contents);
+        return amount - remaining;
+    }
+
+    public boolean matchesCustomItem(ItemStack stack, CustomItem shopItem) {
+        if (stack == null) return false;
+
+        Material targetMaterial = Material.getMaterial(shopItem.getMaterial().toUpperCase());
+        if (targetMaterial == null || stack.getType() != targetMaterial) return false;
+
+        ItemMeta meta = stack.getItemMeta();
+
+        if (shopItem.getCustomModelData() > 0) {
+            if (meta == null || !meta.hasCustomModelData()) return false;
+            if (meta.getCustomModelData() != shopItem.getCustomModelData()) return false;
+        }
+
+        if (targetMaterial == Material.PLAYER_HEAD && shopItem.getHeadTexture() != null && !shopItem.getHeadTexture().isEmpty()) {
+            String currentTexture = extractHeadTexture(stack);
+            if (currentTexture == null || !currentTexture.equals(shopItem.getHeadTexture())) return false;
+        }
+
+        if (shopItem.getLore() != null && !shopItem.getLore().isEmpty()) {
+            if (meta == null || meta.lore() == null) return false;
+            List<String> targetLore = shopItem.getLore().stream()
+                    .map(this::normalizePlain)
+                    .toList();
+            List<String> currentLore = meta.lore().stream()
+                    .map(PlainTextComponentSerializer.plainText()::serialize)
+                    .map(String::trim)
+                    .toList();
+            if (!currentLore.equals(targetLore)) return false;
+        }
+
+        if (shopItem.getName() != null && !shopItem.getName().isEmpty()) {
+            if (meta != null && meta.displayName() != null) {
+                String expectedPlain = normalizePlain(shopItem.getName());
+                String currentPlain = PlainTextComponentSerializer.plainText().serialize(meta.displayName()).trim();
+                if (!currentPlain.equals(expectedPlain)) return false;
+            }
+        }
+
+        return true;
+    }
+
+    private String normalizePlain(String input) {
+        return PlainTextComponentSerializer.plainText().serialize(deserializeText(input)).trim();
+    }
+
+    private Component deserializeText(String input) {
+        if (input == null) return Component.empty();
+        if (input.indexOf('&') >= 0) {
+            return LegacyComponentSerializer.legacyAmpersand().deserialize(input);
+        }
+        if (input.indexOf('§') >= 0) {
+            return LegacyComponentSerializer.legacySection().deserialize(input);
+        }
+        return MiniMessage.miniMessage().deserialize(input);
+    }
+
+    public String extractHeadTexture(ItemStack stack) {
+        if (stack == null || stack.getType() != Material.PLAYER_HEAD) return null;
+        ItemMeta meta = stack.getItemMeta();
+        if (!(meta instanceof SkullMeta skullMeta)) return null;
+        PlayerProfile profile = skullMeta.getPlayerProfile();
+        if (profile == null) return null;
+        for (ProfileProperty property : profile.getProperties()) {
+            if ("textures".equals(property.getName())) {
+                return property.getValue();
+            }
+        }
+        return null;
+    }
+
+    private void applyHeadTexture(ItemMeta meta, String texture) {
+        if (!(meta instanceof SkullMeta skullMeta)) return;
+        PlayerProfile profile = skullMeta.getPlayerProfile();
+        if (profile == null) {
+            profile = Bukkit.createProfile(UUID.randomUUID());
+        }
+        profile.getProperties().removeIf(property -> "textures".equals(property.getName()));
+        profile.getProperties().add(new ProfileProperty("textures", texture));
+        skullMeta.setPlayerProfile(profile);
     }
 }

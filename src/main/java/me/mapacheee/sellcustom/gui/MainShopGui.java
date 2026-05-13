@@ -3,24 +3,25 @@ package me.mapacheee.sellcustom.gui;
 import com.google.inject.Inject;
 import com.thewinterframework.configurate.Container;
 import com.thewinterframework.service.annotation.Service;
+import me.mapacheee.sellcustom.SellCustomItemsPlugin;
 import me.mapacheee.sellcustom.config.ScConfig;
 import me.mapacheee.sellcustom.config.ScMessages;
 import me.mapacheee.sellcustom.data.CustomItem;
 import me.mapacheee.sellcustom.service.EconomyService;
 import me.mapacheee.sellcustom.service.ShopService;
-import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.persistence.PersistentDataType;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
 @Service
 public final class MainShopGui {
@@ -32,12 +33,16 @@ public final class MainShopGui {
 
     private static final int ITEMS_PER_PAGE = 45;
 
+    private final NamespacedKey actionKey;
+    private final NamespacedKey itemKey;
     @Inject
     public MainShopGui(ShopService shopService, EconomyService economyService, Container<ScConfig> configContainer, Container<ScMessages> messagesContainer) {
         this.shopService = shopService;
         this.economyService = economyService;
         this.config = configContainer.get();
         this.messages = messagesContainer.get();
+        this.actionKey = new NamespacedKey(SellCustomItemsPlugin.getInstance(), "sc_action");
+        this.itemKey = new NamespacedKey(SellCustomItemsPlugin.getInstance(), "sc_item_id");
     }
 
     public void open(Player player, int page) {
@@ -68,10 +73,10 @@ public final class MainShopGui {
         }
 
         if (page > 1) {
-            inv.setItem(rows * 9 - 9, createNavigationItem("<green>Previous Page", "prev"));
+            inv.setItem(rows * 9 - 9, createNavigationItem(messages.shopPrevPage(), "prev"));
         }
         if (page < totalPages) {
-            inv.setItem(rows * 9 - 1, createNavigationItem("<green>Next Page", "next"));
+            inv.setItem(rows * 9 - 1, createNavigationItem(messages.shopNextPage(), "next"));
         }
 
         ItemStack balanceItem = createBalanceItem(player);
@@ -80,6 +85,8 @@ public final class MainShopGui {
         player.openInventory(inv);
         player.setMetadata("shop_page", new org.bukkit.metadata.FixedMetadataValue(
                 Bukkit.getPluginManager().getPlugin("SellCustomItems"), page));
+        player.setMetadata("sc_gui", new org.bukkit.metadata.FixedMetadataValue(
+                Bukkit.getPluginManager().getPlugin("SellCustomItems"), "main_shop"));
     }
 
     @SuppressWarnings("deprecation")
@@ -97,23 +104,17 @@ public final class MainShopGui {
 
             List<String> lore = new ArrayList<>();
 
-            if (item.isCanBuy()) {
-                lore.add("<gray>Buy: <green>" + economyService.formatMoney(item.getBuyPrice()));
-            } else {
-                lore.add("<gray>Buy: <red>Disabled");
-            }
-
             if (item.isCanSell()) {
-                lore.add("<gray>Sell: <green>" + economyService.formatMoney(item.getSellPrice()));
+                lore.add(messages.shopSellLine().replace("<price>", economyService.formatMoney(item.getSellPrice())));
+                lore.add(messages.shopClickSell());
+                lore.add(messages.shopClickSellAll());
             } else {
-                lore.add("<gray>Sell: <red>Disabled");
+                lore.add(messages.shopSellDisabled());
             }
 
-            lore.add("<dark_gray>Click to sell");
-            lore.add("<dark_gray>Shift+Click to buy");
 
             if (item.getAmount() > 1) {
-                lore.add("<gray>Amount: " + item.getAmount());
+                lore.add(messages.shopAmountLine().replace("<amount>", String.valueOf(item.getAmount())));
             }
 
             meta.lore(lore.stream().map(l -> MiniMessage.miniMessage().deserialize(l)).toList());
@@ -122,6 +123,10 @@ public final class MainShopGui {
                 meta.setCustomModelData(item.getCustomModelData());
             }
 
+            meta.getPersistentDataContainer().set(actionKey, PersistentDataType.STRING, "shop_item");
+            if (item.getId() != null && !item.getId().isEmpty()) {
+                meta.getPersistentDataContainer().set(itemKey, PersistentDataType.STRING, item.getId());
+            }
             stack.setItemMeta(meta);
         }
 
@@ -137,7 +142,7 @@ public final class MainShopGui {
             String balanceStr = economyService.formatMoney(balance);
             meta.displayName(MiniMessage.miniMessage().deserialize(messages.balance()
                     .replace("<balance>", balanceStr)));
-            meta.lore(List.of(MiniMessage.miniMessage().deserialize("<gray>Your current balance")));
+            meta.lore(List.of(MiniMessage.miniMessage().deserialize(messages.balanceLore())));
             item.setItemMeta(meta);
         }
 
@@ -150,126 +155,12 @@ public final class MainShopGui {
 
         if (meta != null) {
             meta.displayName(MiniMessage.miniMessage().deserialize(name));
+            meta.getPersistentDataContainer().set(actionKey, PersistentDataType.STRING, action);
             item.setItemMeta(meta);
         }
 
         return item;
     }
 
-    public void handleClick(Player player, ItemStack clicked, boolean shiftClick) {
-        if (clicked == null || clicked.getType() == Material.AIR) return;
-
-        ItemMeta meta = clicked.getItemMeta();
-        if (meta == null || meta.lore() == null) return;
-
-        String displayName = meta.displayName() != null ? Objects.requireNonNull(meta.displayName()).toString() : "";
-
-        if (displayName.contains("Previous Page")) {
-            int currentPage = 1;
-            if (player.hasMetadata("shop_page")) {
-                currentPage = player.getMetadata("shop_page").getFirst().asInt();
-            }
-            open(player, currentPage - 1);
-            return;
-        }
-
-        if (displayName.contains("Next Page")) {
-            int currentPage = 1;
-            if (player.hasMetadata("shop_page")) {
-                currentPage = player.getMetadata("shop_page").getFirst().asInt();
-            }
-            open(player, currentPage + 1);
-            return;
-        }
-
-        List<Component> loreComponents = meta.lore();
-        if (loreComponents == null || loreComponents.isEmpty()) return;
-
-        List<String> lore = loreComponents.stream()
-                .map(c -> MiniMessage.miniMessage().serialize(c))
-                .toList();
-
-        for (CustomItem item : shopService.getEnabledItems()) {
-            String buyLine = "<gray>Buy: ";
-            String sellLine = "<gray>Sell: ";
-
-            boolean isShopItem = false;
-            for (String line : lore) {
-                if (line.contains("Buy:") || line.contains("Sell:")) {
-                    isShopItem = true;
-                    break;
-                }
-            }
-
-            if (!isShopItem) continue;
-
-            if (shiftClick && item.isCanBuy() && hasBuyLore(lore)) {
-                openSellConfirmGui(player, item, true);
-                return;
-            } else if (!shiftClick && item.isCanSell() && hasSellLore(lore)) {
-                openSellConfirmGui(player, item, false);
-                return;
-            }
-        }
-    }
-
-    private boolean hasBuyLore(List<String> lore) {
-        return lore.stream().anyMatch(l -> l.contains("Buy:") && !l.contains("Disabled"));
-    }
-
-    private boolean hasSellLore(List<String> lore) {
-        return lore.stream().anyMatch(l -> l.contains("Sell:") && !l.contains("Disabled"));
-    }
-
-    public void openSellConfirmGui(Player player, CustomItem item, boolean buying) {
-        Inventory inv = Bukkit.createInventory(null, 9, MiniMessage.miniMessage().deserialize(
-                buying ? messages.confirmPurchaseTitle() : messages.confirmSellTitle()
-        ));
-
-        ItemStack itemStack = shopService.createItemStack(item, 1);
-        ItemMeta meta = itemStack.getItemMeta();
-
-        if (meta != null) {
-            List<String> lore = new ArrayList<>();
-            if (buying) {
-                for (String line : messages.confirmPurchaseLore()) {
-                    if (line.contains("<price>")) {
-                        lore.add(line.replace("<price>", economyService.formatMoney(item.getBuyPrice())));
-                    } else {
-                        lore.add(line);
-                    }
-                }
-            } else {
-                for (String line : messages.confirmSellLore()) {
-                    if (line.contains("<price>")) {
-                        lore.add(line.replace("<price>", economyService.formatMoney(item.getSellPrice())));
-                    } else {
-                        lore.add(line);
-                    }
-                }
-            }
-            meta.lore(lore.stream().map(l -> MiniMessage.miniMessage().deserialize(l)).toList());
-            itemStack.setItemMeta(meta);
-        }
-
-        ItemStack glass = new ItemStack(Material.GRAY_STAINED_GLASS_PANE);
-        ItemMeta glassMeta = glass.getItemMeta();
-        glassMeta.displayName(MiniMessage.miniMessage().deserialize(" "));
-        glass.setItemMeta(glassMeta);
-
-        for (int i = 0; i < 9; i++) {
-            if (i != 4) {
-                inv.setItem(i, glass);
-            }
-        }
-
-        inv.setItem(4, itemStack);
-
-        player.setMetadata("shop_item", new org.bukkit.metadata.FixedMetadataValue(
-                Bukkit.getPluginManager().getPlugin("SellCustomItems"), item.getId()));
-        player.setMetadata("shop_buying", new org.bukkit.metadata.FixedMetadataValue(
-                Bukkit.getPluginManager().getPlugin("SellCustomItems"), buying));
-
-        player.openInventory(inv);
-    }
+    // Confirm GUI removed: shop now sells directly from the main GUI.
 }

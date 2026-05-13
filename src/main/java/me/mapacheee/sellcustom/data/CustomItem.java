@@ -39,6 +39,9 @@ public final class CustomItem {
     @Setting("custom-model-data")
     private int customModelData = 0;
 
+    @Setting("head-texture")
+    private String headTexture;
+
     @Setting("enabled")
     private boolean enabled = true;
 
@@ -87,6 +90,9 @@ public final class CustomItem {
 
     public int getCustomModelData() { return customModelData; }
     public void setCustomModelData(int customModelData) { this.customModelData = customModelData; }
+
+    public String getHeadTexture() { return headTexture; }
+    public void setHeadTexture(String headTexture) { this.headTexture = headTexture; }
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }

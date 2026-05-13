@@ -1,7 +1,11 @@
 package me.mapacheee.sellcustom.listener;
 
 import com.google.inject.Inject;
+import com.thewinterframework.configurate.Container;
 import com.thewinterframework.paper.listener.ListenerComponent;
+import io.papermc.paper.event.player.AsyncChatEvent;
+import me.mapacheee.sellcustom.SellCustomItemsPlugin;
+import me.mapacheee.sellcustom.config.ScMessages;
 import me.mapacheee.sellcustom.data.CustomItem;
 import me.mapacheee.sellcustom.data.CustomItemStorage;
 import me.mapacheee.sellcustom.gui.EditorGui;
@@ -10,8 +14,11 @@ import me.mapacheee.sellcustom.service.EconomyService;
 import me.mapacheee.sellcustom.service.ShopService;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.title.Title;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.Sound;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -19,7 +26,11 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.persistence.PersistentDataContainer;
+import org.bukkit.persistence.PersistentDataType;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -32,183 +43,416 @@ public final class ShopListener implements Listener {
     private final MainShopGui mainShopGui;
     private final EditorGui editorGui;
     private final CustomItemStorage itemStorage;
+    private final ScMessages messages;
+
+    private final NamespacedKey actionKey;
+    private final NamespacedKey itemKey;
+    private static final String META_EDIT_FIELD = "editor_input_field";
+    private static final String META_EDIT_ITEM = "editor_input_item";
 
     @Inject
     public ShopListener(ShopService shopService, EconomyService economyService, MainShopGui mainShopGui,
-                        EditorGui editorGui, CustomItemStorage itemStorage) {
+                        EditorGui editorGui, CustomItemStorage itemStorage, Container<ScMessages> messagesContainer) {
         this.shopService = shopService;
         this.economyService = economyService;
         this.mainShopGui = mainShopGui;
         this.editorGui = editorGui;
         this.itemStorage = itemStorage;
+        this.messages = messagesContainer.get();
+        this.actionKey = new NamespacedKey(SellCustomItemsPlugin.getInstance(), "sc_action");
+        this.itemKey = new NamespacedKey(SellCustomItemsPlugin.getInstance(), "sc_item_id");
     }
 
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) return;
 
-        boolean shiftClick = event.isShiftClick();
         ItemStack clicked = event.getCurrentItem();
-
         if (clicked == null || clicked.getType() == Material.AIR) return;
 
-        event.getView().title();
-        String title = event.getView().title() != null ? event.getView().title().toString() : "";
-
-        boolean isEditor = title.contains("Editor") || title.contains("Editing:");
-        boolean isConfirmShop = title.contains("Confirm") || title.contains("Purchase");
-        boolean isMainShop = title.contains("Shop") || title.contains("Custom Items");
-
-        if (isEditor) {
-            handleEditorClick(player, clicked, event.getSlot());
+        if (player.hasMetadata("sc_gui") && event.getClickedInventory() == event.getView().getTopInventory()) {
             event.setCancelled(true);
-        } else if (isConfirmShop) {
-            handleConfirmClick(player, clicked);
+        } else if (player.hasMetadata("sc_gui") && event.getClickedInventory() == player.getInventory() && event.isShiftClick()) {
             event.setCancelled(true);
-        } else if (isMainShop) {
-            handleMainShopClick(player, clicked, shiftClick);
-            event.setCancelled(true);
-        }
-    }
-
-    private void handleMainShopClick(Player player, ItemStack clicked, boolean shiftClick) {
-        ItemMeta meta = clicked.getItemMeta();
-        if (meta == null || meta.lore() == null) return;
-
-        List<Component> loreComponents = meta.lore();
-        if (loreComponents == null || loreComponents.isEmpty()) return;
-
-        List<String> lore = loreComponents.stream()
-                .map(c -> MiniMessage.miniMessage().serialize(c))
-                .toList();
-
-        for (CustomItem item : shopService.getEnabledItems()) {
-            String itemName = item.getName() != null ? item.getName() : item.getId();
-
-            boolean hasBuy = lore.stream().anyMatch(l -> l.contains("Buy:") && !l.contains("Disabled"));
-            boolean hasSell = lore.stream().anyMatch(l -> l.contains("Sell:") && !l.contains("Disabled"));
-
-            if (shiftClick && hasBuy && item.isCanBuy()) {
-                mainShopGui.openSellConfirmGui(player, item, true);
-                return;
-            } else if (!shiftClick && hasSell && item.isCanSell()) {
-                openSellAmountGui(player, item);
-                return;
-            }
-        }
-    }
-
-    private void openSellAmountGui(Player player, CustomItem item) {
-        int available = shopService.countItemsInInventory(player, item);
-
-        if (available == 0) {
-            player.sendMessage(MiniMessage.miniMessage().deserialize("<red>You don't have any items to sell!"));
             return;
         }
 
-        Bukkit.getScheduler().runTask(Objects.requireNonNull(Bukkit.getPluginManager().getPlugin("SellCustomItems")), () -> {
-            player.closeInventory();
-        });
+        boolean shiftClick = event.isShiftClick();
 
-        String formattedPrice = economyService.formatMoney(item.getSellPrice() * available);
-        player.sendMessage(MiniMessage.miniMessage().deserialize(
-                "<dark_gray>You have <gold>" + available + " <gray>x " + item.getName() +
-                        "<dark_gray>. Each sells for <green>" + economyService.formatMoney(item.getSellPrice()) +
-                        "<dark_gray>. Total: <green>" + formattedPrice
-        ));
-        player.sendMessage(MiniMessage.miniMessage().deserialize(
-                "<dark_gray>Click an item in your inventory to sell it (or type /sc sell <amount>)"
-        ));
-
-        player.setMetadata("sell_item", new org.bukkit.metadata.FixedMetadataValue(
-            Objects.requireNonNull(Bukkit.getPluginManager().getPlugin("SellCustomItems")), item.getId()));
-    }
-
-    private void handleConfirmClick(Player player, ItemStack clicked) {
-        if (clicked == null || clicked.getType() == Material.AIR) return;
-
-        if (clicked.getType() == Material.GRAY_STAINED_GLASS_PANE) return;
-
-        if (!player.hasMetadata("shop_item") || !player.hasMetadata("shop_buying")) return;
-
-        String itemId = player.getMetadata("shop_item").getFirst().asString();
-        boolean buying = player.getMetadata("shop_buying").getFirst().asBoolean();
-
-        CustomItem item = shopService.getItem(itemId);
-        if (item == null) return;
-
-        if (buying) {
-            if (economyService.hasMoney(player, item.getBuyPrice())) {
-                if (shopService.buyItem(player, item, 1)) {
-                    player.sendMessage(MiniMessage.miniMessage().deserialize(
-                            "<green>You purchased " + item.getName() + " for " + economyService.formatMoney(item.getBuyPrice())
-                    ));
-                } else {
-                    player.sendMessage(MiniMessage.miniMessage().deserialize("<red>Failed to purchase item!"));
-                }
-            } else {
-                player.sendMessage(MiniMessage.miniMessage().deserialize("<red>Not enough money!"));
-            }
-        } else {
-            int count = shopService.countItemsInInventory(player, item);
-            if (count > 0) {
-                shopService.sellItem(player, item, player.getInventory().getItem(0), count);
-                player.sendMessage(MiniMessage.miniMessage().deserialize(
-                        "<green>You sold " + count + " x " + item.getName() + " for " + economyService.formatMoney(item.getSellPrice() * count)
-                ));
-            } else {
-                player.sendMessage(MiniMessage.miniMessage().deserialize("<red>You don't have any items to sell!"));
-            }
-        }
-
-        player.removeMetadata("shop_item", Objects.requireNonNull(Bukkit.getPluginManager().getPlugin("SellCustomItems")));
-        player.removeMetadata("shop_buying", Objects.requireNonNull(Bukkit.getPluginManager().getPlugin("SellCustomItems")));
-        player.closeInventory();
-    }
-
-    private void handleEditorClick(Player player, ItemStack clicked, int slot) {
         ItemMeta meta = clicked.getItemMeta();
         if (meta == null) return;
 
-        String displayName = meta.displayName() != null ? Objects.requireNonNull(meta.displayName()).toString() : "";
-        String plainName = MiniMessage.miniMessage().serialize(MiniMessage.miniMessage().deserialize(displayName));
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        String action = pdc.get(actionKey, PersistentDataType.STRING);
+        String itemId = pdc.get(itemKey, PersistentDataType.STRING);
 
-        if (plainName.contains("Click to add item from hand")) {
-            player.sendMessage(MiniMessage.miniMessage().deserialize(
-                    "<dark_gray>Hold an item and run <white>/sc sell <price>"
-            ));
+        if (action == null && itemId == null) return;
+        if (event.getClickedInventory() != event.getView().getTopInventory()) return;
+
+        event.setCancelled(true);
+
+        if (action != null && action.startsWith("editor_")) {
+            handleEditorAction(player, action, itemId);
             return;
         }
 
-        if (plainName.contains("Click to save all") || plainName.contains("Click to save")) {
-            itemStorage.save();
-            player.sendMessage(MiniMessage.miniMessage().deserialize("<green>All changes saved!"));
-            player.closeInventory();
-            return;
-        }
-
-        if (plainName.contains("Click to close") || plainName.contains("Cancel")) {
-            player.closeInventory();
-            return;
-        }
-
-        if (plainName.contains("Delete Item")) {
-            if (player.hasMetadata("editing_item")) {
-                String itemId = player.getMetadata("editing_item").getFirst().asString();
-                itemStorage.removeItem(itemId);
-                player.sendMessage(MiniMessage.miniMessage().deserialize("<green>Item deleted!"));
-                editorGui.openMainEditor(player);
+        if ("prev".equals(action) || "next".equals(action)) {
+            int currentPage = 1;
+            if (player.hasMetadata("shop_page")) {
+                currentPage = player.getMetadata("shop_page").getFirst().asInt();
             }
+            mainShopGui.open(player, "prev".equals(action) ? currentPage - 1 : currentPage + 1);
             return;
         }
 
-        Map<String, CustomItem> items = shopService.getAllItems();
-        for (CustomItem item : items.values()) {
-            String itemName = item.getName() != null ? item.getName() : item.getId();
-            if (displayName.contains(itemName) && !displayName.contains("Editing")) {
-                editorGui.openItemEditor(player, item);
+        if ("shop_item".equals(action) && itemId != null) {
+            CustomItem item = shopService.getItem(itemId);
+            if (item == null) return;
+            if (!item.isCanSell()) return;
+
+            int available = shopService.countItemsInInventory(player, item);
+            if (available <= 0) {
+                player.sendMessage(MiniMessage.miniMessage().deserialize(messages.sellFailedNoItems()));
                 return;
             }
+
+            int toSell = shiftClick ? available : 1;
+            int sold = shopService.sellItem(player, item, toSell);
+            if (sold > 0) {
+                String msg = applyPlaceholders(messages.sellSuccess(), item, sold, item.getSellPrice() * sold);
+                player.sendMessage(MiniMessage.miniMessage().deserialize(msg));
+            } else {
+                player.sendMessage(MiniMessage.miniMessage().deserialize(messages.sellFailedNoItems()));
+            }
+            return;
+        }
+    }
+
+    private void handleEditorAction(Player player, String action, String itemId) {
+        if ("editor_add".equals(action)) {
+            ItemStack hand = player.getInventory().getItemInMainHand();
+            if (hand.getType() == Material.AIR) {
+                player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorInputEmptyHand()));
+                return;
+            }
+            beginEditorInput(player, new CustomItem("pending", "", hand.getType().name(), 0, 0), "create_from_hand",
+                    messages.editorInputTitle(),
+                    messages.editorInputSubtitle(),
+                    messages.editorInputPrompt(),
+                    Map.of(
+                            "field", messages.editorFieldBuyPrice(),
+                            "hint", messages.editorHintBuyPrice(),
+                            "example", messages.editorExamplePrice()
+                    ));
+            return;
+        }
+
+        if ("editor_save".equals(action)) {
+            itemStorage.save();
+            player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorSaveSuccess()));
+            editorGui.openMainEditor(player);
+            return;
+        }
+
+        if ("editor_close".equals(action)) {
+            player.closeInventory();
+            return;
+        }
+
+        if ("editor_delete".equals(action) && itemId != null) {
+            itemStorage.removeItem(itemId);
+            player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorDeleteSuccess()));
+            editorGui.openMainEditor(player);
+            return;
+        }
+
+        if (("editor_toggle_enabled".equals(action) || "editor_toggle_can_buy".equals(action) || "editor_toggle_can_sell".equals(action)) && itemId != null) {
+            CustomItem item = shopService.getItem(itemId);
+            if (item != null) {
+                if ("editor_toggle_enabled".equals(action)) {
+                    item.setEnabled(!item.isEnabled());
+                } else if ("editor_toggle_can_buy".equals(action)) {
+                    item.setCanBuy(!item.isCanBuy());
+                } else if ("editor_toggle_can_sell".equals(action)) {
+                    item.setCanSell(!item.isCanSell());
+                }
+                itemStorage.updateItem(item);
+                player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorToggleSuccess()));
+                editorGui.openItemEditor(player, item);
+            }
+            return;
+        }
+
+        if ("editor_item".equals(action) && itemId != null) {
+            CustomItem item = shopService.getItem(itemId);
+            if (item != null) {
+                editorGui.openItemEditor(player, item);
+            }
+            return;
+        }
+
+        if (itemId == null) return;
+        CustomItem item = shopService.getItem(itemId);
+        if (item == null) return;
+
+        if ("editor_edit_name".equals(action)) {
+            beginEditorInput(player, item, "name",
+                    messages.editorInputTitle(),
+                    messages.editorInputSubtitle(),
+                    messages.editorInputPrompt(),
+                    Map.of(
+                            "field", messages.editorFieldName(),
+                            "hint", messages.editorHintName(),
+                            "example", messages.editorExampleName()
+                    ));
+            return;
+        }
+
+        if ("editor_edit_buy_price".equals(action)) {
+            beginEditorInput(player, item, "buy_price",
+                    messages.editorInputTitle(),
+                    messages.editorInputSubtitle(),
+                    messages.editorInputPrompt(),
+                    Map.of(
+                            "field", messages.editorFieldBuyPrice(),
+                            "hint", messages.editorHintBuyPrice(),
+                            "example", messages.editorExamplePrice()
+                    ));
+            return;
+        }
+
+        if ("editor_edit_sell_price".equals(action)) {
+            beginEditorInput(player, item, "sell_price",
+                    messages.editorInputTitle(),
+                    messages.editorInputSubtitle(),
+                    messages.editorInputPrompt(),
+                    Map.of(
+                            "field", messages.editorFieldSellPrice(),
+                            "hint", messages.editorHintSellPrice(),
+                            "example", messages.editorExamplePrice()
+                    ));
+            return;
+        }
+
+        if ("editor_edit_slot".equals(action)) {
+            beginEditorInput(player, item, "slot",
+                    messages.editorInputTitle(),
+                    messages.editorInputSubtitle(),
+                    messages.editorInputPrompt(),
+                    Map.of(
+                            "field", messages.editorFieldSlot(),
+                            "hint", messages.editorHintSlot(),
+                            "example", messages.editorExampleSlot()
+                    ));
+            return;
+        }
+
+        if ("editor_edit_lore".equals(action)) {
+            beginEditorInput(player, item, "lore",
+                    messages.editorInputTitle(),
+                    messages.editorInputSubtitle(),
+                    messages.editorInputPrompt(),
+                    Map.of(
+                            "field", messages.editorFieldLore(),
+                            "hint", messages.editorInputLoreHint(),
+                            "example", messages.editorExampleLore()
+                    ));
+            return;
+        }
+
+        if ("editor_edit_material".equals(action)) {
+            beginEditorInput(player, item, "material",
+                    messages.editorInputTitle(),
+                    messages.editorInputSubtitle(),
+                    messages.editorInputPrompt(),
+                    Map.of(
+                            "field", messages.editorFieldMaterial(),
+                            "hint", messages.editorInputMaterialHint(),
+                            "example", messages.editorExampleMaterial()
+                    ));
+        }
+    }
+
+    private String applyPlaceholders(String message, CustomItem item, int amount, double price) {
+        String itemName = item.getName() != null && !item.getName().isEmpty() ? item.getName() : item.getId();
+        String result = message.replace("<item_name>", itemName != null ? itemName : "");
+        result = result.replace("<amount>", String.valueOf(amount));
+        result = result.replace("<price>", economyService.formatMoney(price));
+        return result;
+    }
+
+    private String applyPlaceholders(String message, Map<String, String> placeholders) {
+        String result = message;
+        for (Map.Entry<String, String> entry : placeholders.entrySet()) {
+            result = result.replace("<" + entry.getKey() + ">", entry.getValue());
+        }
+        return result;
+    }
+
+    private void beginEditorInput(Player player, CustomItem item, String field, String title, String subtitle, String chatPrompt, Map<String, String> placeholders) {
+        player.closeInventory();
+        player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 1.0f, 1.2f);
+
+        String titleText = applyPlaceholders(title, placeholders);
+        String subtitleText = applyPlaceholders(subtitle, placeholders);
+        Component titleComponent = MiniMessage.miniMessage().deserialize(titleText);
+        Component subtitleComponent = MiniMessage.miniMessage().deserialize(subtitleText);
+        Title.Times times = Title.Times.times(Duration.ofMillis(500), Duration.ofMillis(2000), Duration.ofMillis(500));
+        player.showTitle(Title.title(titleComponent, subtitleComponent, times));
+
+        player.sendMessage(MiniMessage.miniMessage().deserialize(applyPlaceholders(chatPrompt, placeholders)));
+        if (placeholders.containsKey("example")) {
+            player.sendMessage(MiniMessage.miniMessage().deserialize(
+                    applyPlaceholders(messages.editorInputExample(), placeholders)));
+        }
+
+        var plugin = Objects.requireNonNull(Bukkit.getPluginManager().getPlugin("SellCustomItems"));
+        player.setMetadata(META_EDIT_FIELD, new org.bukkit.metadata.FixedMetadataValue(plugin, field));
+        player.setMetadata(META_EDIT_ITEM, new org.bukkit.metadata.FixedMetadataValue(plugin, item.getId()));
+    }
+
+    @EventHandler
+    public void onEditorChatInput(AsyncChatEvent event) {
+        Player player = event.getPlayer();
+        if (!player.hasMetadata(META_EDIT_FIELD) || !player.hasMetadata(META_EDIT_ITEM)) return;
+
+        event.setCancelled(true);
+        String message = PlainTextComponentSerializer.plainText().serialize(event.message()).trim();
+        handleEditorChat(player, message);
+    }
+
+    private void handleEditorChat(Player player, String input) {
+        String field = player.getMetadata(META_EDIT_FIELD).getFirst().asString();
+        String itemId = player.getMetadata(META_EDIT_ITEM).getFirst().asString();
+
+        Bukkit.getScheduler().runTask(Objects.requireNonNull(Bukkit.getPluginManager().getPlugin("SellCustomItems")),
+                () -> applyEditorInput(player, field, itemId, input));
+    }
+
+    private void applyEditorInput(Player player, String field, String itemId, String input) {
+        if (input.equalsIgnoreCase("cancel")) {
+            clearEditorInput(player);
+            player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorInputCancelled()));
+            return;
+        }
+
+        if ("create_from_hand".equals(field)) {
+            Double value = parseDouble(input);
+            if (value == null) {
+                player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorInputInvalidNumber()));
+                return;
+            }
+            ItemStack hand = player.getInventory().getItemInMainHand();
+            if (hand.getType() == Material.AIR) {
+                player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorInputEmptyHand()));
+                return;
+            }
+            double sellPrice = value * 0.5;
+            shopService.createItemFromHand(player, value, sellPrice);
+            clearEditorInput(player);
+            String msg = messages.itemCreatedFromHand()
+                    .replace("<buy_price>", String.valueOf(value))
+                    .replace("<sell_price>", String.valueOf(sellPrice));
+            player.sendMessage(MiniMessage.miniMessage().deserialize(msg));
+            editorGui.openMainEditor(player);
+            return;
+        }
+
+        CustomItem item = shopService.getItem(itemId);
+        if (item == null) {
+            clearEditorInput(player);
+            player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorInputItemNotFound()));
+            return;
+        }
+
+        switch (field) {
+            case "name" -> {
+                item.setName(input);
+            }
+            case "buy_price" -> {
+                Double value = parseDouble(input);
+                if (value == null) {
+                    player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorInputInvalidNumber()));
+                    return;
+                }
+                item.setBuyPrice(value);
+            }
+            case "sell_price" -> {
+                Double value = parseDouble(input);
+                if (value == null) {
+                    player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorInputInvalidNumber()));
+                    return;
+                }
+                item.setSellPrice(value);
+            }
+            case "slot" -> {
+                Integer value = parseInt(input);
+                if (value == null || value < 0) {
+                    player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorInputInvalidSlot()));
+                    return;
+                }
+                item.setSlot(value);
+            }
+            case "lore" -> {
+                List<String> lines = new java.util.ArrayList<>();
+                if (!input.isEmpty()) {
+                    for (String part : input.split("\\|")) {
+                        String line = part.trim();
+                        if (!line.isEmpty()) {
+                            lines.add(line);
+                        }
+                    }
+                }
+                item.setLore(lines);
+            }
+            case "material" -> {
+                ItemStack hand = player.getInventory().getItemInMainHand();
+                if (hand.getType() == Material.AIR) {
+                    player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorInputEmptyHand()));
+                    return;
+                }
+                if (!input.equalsIgnoreCase("ok")) {
+                    player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorInputConfirmMaterial()));
+                    return;
+                }
+                item.setMaterial(hand.getType().name());
+                if (hand.getType() == Material.PLAYER_HEAD) {
+                    item.setHeadTexture(shopService.extractHeadTexture(hand));
+                } else {
+                    item.setHeadTexture(null);
+                }
+            }
+            default -> {
+                player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorInputUnsupportedField()));
+                return;
+            }
+        }
+
+        itemStorage.updateItem(item);
+        clearEditorInput(player);
+        player.sendMessage(MiniMessage.miniMessage().deserialize(messages.editorInputUpdated()));
+        editorGui.openItemEditor(player, item);
+    }
+
+    private void clearEditorInput(Player player) {
+        var plugin = Objects.requireNonNull(Bukkit.getPluginManager().getPlugin("SellCustomItems"));
+        player.removeMetadata(META_EDIT_FIELD, plugin);
+        player.removeMetadata(META_EDIT_ITEM, plugin);
+    }
+
+    private Double parseDouble(String input) {
+        try {
+            return Double.parseDouble(input);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private Integer parseInt(String input) {
+        try {
+            return Integer.parseInt(input);
+        } catch (NumberFormatException ex) {
+            return null;
         }
     }
 
@@ -222,8 +466,8 @@ public final class ShopListener implements Listener {
         if (player.hasMetadata("shop_item")) {
             player.removeMetadata("shop_item", Objects.requireNonNull(Bukkit.getPluginManager().getPlugin("SellCustomItems")));
         }
-        if (player.hasMetadata("shop_buying")) {
-            player.removeMetadata("shop_buying", Objects.requireNonNull(Bukkit.getPluginManager().getPlugin("SellCustomItems")));
+        if (player.hasMetadata("sc_gui")) {
+            player.removeMetadata("sc_gui", Objects.requireNonNull(Bukkit.getPluginManager().getPlugin("SellCustomItems")));
         }
     }
 }

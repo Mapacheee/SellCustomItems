@@ -53,7 +53,10 @@ public final class CustomItemStorage {
                 ConfigurationNode itemNode = itemsNode.node(itemId);
                 CustomItem item = itemNode.get(CustomItem.class);
                 if (item != null) {
-                    items.put(itemId, item);
+                    if (item.getId() == null || item.getId().isEmpty()) {
+                        item.setId(itemId);
+                    }
+                    items.put(itemId.toLowerCase(), item);
                 }
             }
 
@@ -102,7 +105,8 @@ items:
     public void save() {
         try {
             ConfigurationNode itemsNode = rootNode.node("items");
-            itemsNode.childrenMap().clear();
+            itemsNode.set(null);
+            itemsNode = rootNode.node("items");
 
             for (Map.Entry<String, CustomItem> entry : items.entrySet()) {
                 itemsNode.node(entry.getKey()).set(entry.getValue());

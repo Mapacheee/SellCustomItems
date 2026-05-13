@@ -39,7 +39,7 @@ public final class SellCustomCommand {
     @Command("buycustomitems")
     public void buyCustomItems(Source source) {
         if (!(source.source() instanceof Player player)) {
-            source.source().sendMessage(MiniMessage.miniMessage().deserialize(messages.get().prefix() + "<red>This command can only be used by players."));
+            source.source().sendMessage(MiniMessage.miniMessage().deserialize(messages.get().prefix() + messages.get().playersOnly()));
             return;
         }
         mainShopGui.open(player, 1);
@@ -83,7 +83,7 @@ public final class SellCustomCommand {
         send(source, msg);
     }
 
-@Command("sc add <id> <buy-price> <sell-price>")
+    @Command("sc add <id> <buy-price> <sell-price>")
     @Permission("sellcustom.admin")
     public void addItem(Source source, @Argument("id") String id, @Argument("buy-price") double buyPrice, @Argument("sell-price") double sellPrice) {
         String normalizedId = id.toLowerCase();
